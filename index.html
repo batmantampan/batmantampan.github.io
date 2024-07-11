@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strava Authorization</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container" id="reportContent">
+        <?php
+        session_start();
+
+        $redirect_uri = 'https://feisalrm.github.io/';  // Perbarui dengan URL GitHub Pages Anda
+        $start_date = '2024-01-01T00:00:00Z';  // Tanggal mulai
+        $end_date = '2024-06-30T23:59:59Z';    // Tanggal akhir
+
+        if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['client_id'])) {
+            $_SESSION['client_id'] = $_POST['client_id'];
+            $auth_url = 'http://www.strava.com/oauth/authorize?client_id=' . $_SESSION['client_id'] . '&response_type=code&redirect_uri=' . urlencode($redirect_uri) . '&approval_prompt=force&scope=activity:read_all';
+            header('Location: ' . $auth_url);
+            exit();
+        }
+
+        if (isset($_GET['code'])) {
+            $client_id = $_SESSION['client_id'];
+            $client_secret = 'd34b8d052c5b5d8dd456198803b4a110cf45326a'; // Ganti dengan Client Secret Anda
+            $authorization_code = $_GET['code'];
+
+            $token_url = 'https://www.strava.com/oauth/token';
+            $post_fields = [
+                'client_id' => $client_id,
+                'client_secret' => $client_secret,
+                'code' => $authorization_code,
+                'grant_type' => 'authorization_code'
+            ];
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $token_url);
+            curl_setopt($ch, CURLOPT_POST, 1);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($post_fields));
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            $response = curl_exec($ch);
+            curl_close($ch);
+
+            $token_data = json_decode($response, true);
+
+            if (isset($token_data['access_token'])) {
+                $access_token = $token_data['access_token'];
+                $_SESSION['access_token'] = $access_token;
+
+                // Mendapatkan data atlet
+                $athlete_url = 'https://www.strava.com/api/v3/athlete';
+                $headers = [
+                    'Authorization: Bearer ' . $access_token
+                ];
+
+                $ch = curl_init();
+                curl_setopt($ch, CURLOPT_URL, $athlete_url);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                $response = curl_exec($ch);
+                curl_close($ch);
+
+                $athlete_data = json_decode($response, true);
+
+                if (isset($athlete_data['firstname'])) {
+                    echo "<h1>Data Atlet</h1>";
+                    echo "<p>Nama: " . htmlspecialchars($athlete_data['firstname']) . " " . htmlspecialchars($athlete_data['lastname']) . "</p>";
+                    echo "<p>Kota: " . htmlspecialchars($athlete_data['city']) . "</p>";
+                    echo "<p>Negara: " . htmlspecialchars($athlete_data['country']) . "</p>";
+
+                    // Mendapatkan data aktivitas
+                    $activities_url = 'https://www.strava.com/api/v3/athlete/activities?after=' . strtotime($start_date) . '&before=' . strtotime($end_date);
+                    $ch = curl_init();
+                    curl_setopt($ch, CURLOPT_URL, $activities_url);
+                    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    $response = curl_exec($ch);
+                    curl_close($ch);
+
+                    $activities_data = json_decode($response, true);
+
+                    if (!empty($activities_data)) {
+                        echo "<h2>Data Aktivitas</h2>";
+                        echo "<table>
+                                <tr>
+                                    <th>Waktu Mulai</th>
+                                    <th>Jenis Olahraga</th>
+                                    <th>Jarak (km)</th>
+                                    <th>Durasi (menit)</th>
+                                </tr>";
+
+                        $total_distance = 0;
+                        $total_duration = 0;
+                        foreach ($activities_data as $activity) {
+                            $start_date_local = $activity['start_date_local'];
+                            $type = $activity['type'];
+                            $distance = isset($activity['distance']) ? $activity['distance'] / 1000 : 0; // Convert to km
+                            $moving_time = isset($activity['moving_time']) ? $activity['moving_time'] / 60 : 0; // Convert to minutes
+
+                            if ($type == 'Run' || $type == 'Walk' || $type == 'Ride') {
+                                $total_distance += $distance;
+                            } else {
+                                $total_duration += $moving_time;
+                            }
+
+                            echo "<tr>
+                                    <td>" . htmlspecialchars($start_date_local) . "</td>
+                                    <td>" . htmlspecialchars($type) . "</td>
+                                    <td>" . ($type == 'Run' || $type == 'Walk' || $type == 'Ride' ? htmlspecialchars(number_format($distance, 2)) : '-') . "</td>
+                                    <td>" . ($type != 'Run' && $type != 'Walk' && $type != 'Ride' ? htmlspecialchars(number_format($moving_time, 2)) : '-') . "</td>
+                                  </tr>";
+                        }
+
+                        echo "</table>";
+                        echo "<h3>Rekap Data</h3>";
+                        echo "<p>Total Jarak Tempuh (km): " . number_format($total_distance, 2) . "</p>";
+                        echo "<p>Total Durasi (menit): " . number_format($total_duration, 2) . "</p>";
+                    } else {
+                        echo "Tidak ada aktivitas yang ditemukan dalam periode yang dipilih.";
+                    }
+                } else {
+                    echo "Gagal mendapatkan data atlet.";
+                }
+            } else {
+                echo "Gagal mendapatkan token akses.";
+            }
+        } else {
+            echo '<h1>Strava Authorization</h1>';
+            echo '<form method="POST" action="">
+                    <label for="client_id">Client ID:</label>
+                    <input type="text" id="client_id" name="client_id" required>
+                    <input type="submit" value="Authorize">
+                  </form>';
+        }
+        ?>
+    </div>
+
+    <?php if (isset($athlete_data) && isset($athlete_data['firstname'])): ?>
+        <div class="download-button">
+            <button id="downloadPDF">Download PDF</button>
+        </div>
+    <?php endif; ?>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.3.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script>
+        document.getElementById('downloadPDF')?.addEventListener('click', function() {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF('p', 'pt', 'a4');
+            const elementHTML = document.querySelector("#reportContent");
+            const downloadButton = document.querySelector(".download-button");
+
+            downloadButton.style.display = 'none';
+
+            html2canvas(elementHTML).then(canvas => {
+                downloadButton.style.display = 'block';
+
+                const imgData = canvas.toDataURL('image/png');
+                const imgWidth = 190; // Width of image in PDF
+                const pageHeight = 285; // Height of page in PDF
+                const imgHeight = canvas.height * imgWidth / canvas.width;
+                let heightLeft = imgHeight;
+                let position = 10;
+
+                doc.addImage(imgData, 'PNG', 10, position, imgWidth, imgHeight);
+                heightLeft -= pageHeight;
+
+                while (heightLeft >= 0) {
+                    position = heightLeft - imgHeight + 20;
+                    doc.addPage();
+                    doc.addImage(imgData, 'PNG', 10, position, imgWidth, imgHeight);
+                    heightLeft -= pageHeight;
+                }
+                doc.save('Laporan_Aktivitas.pdf');
+            });
+        });
+    </script>
+</body>
+</html>
